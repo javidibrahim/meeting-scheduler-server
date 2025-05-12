@@ -55,10 +55,16 @@ try:
         # Create MongoDB client with minimal options
         client_params = {
             "tlsCAFile": certifi.where(),
+            "tlsAllowInvalidCertificates": False,
+            "tlsAllowInvalidHostnames": False,
+            "tlsInsecure": False,
             "connectTimeoutMS": 30000,
-            "serverSelectionTimeoutMS": 30000
+            "serverSelectionTimeoutMS": 30000,
+            "ssl": True,
+            "ssl_cert_reqs": ssl.CERT_REQUIRED,
+            "ssl_ca_certs": certifi.where()
         }
-        logger.info(f"MongoDB connection params: {json.dumps(client_params, default=str)}")
+        logger.info(f"MongoDB connection params: {json.dumps({k: v for k, v in client_params.items() if k != 'ssl_ca_certs'}, default=str)}")
         
         # Create the client
         client = AsyncIOMotorClient(
