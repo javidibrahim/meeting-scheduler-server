@@ -7,9 +7,7 @@ from starlette.config import Config
 from starlette.middleware.sessions import SessionMiddleware
 import os
 from dotenv import load_dotenv
-import httpx
 from routes import init_routes
-import logging
 from db.mongo import init_db
 
 # Load environment variables
@@ -59,11 +57,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         body_str = body.decode()
     except:
         body_str = "Could not decode request body"
-        
-    # Log detailed error information
-    logger.error(f"[VALIDATION ERROR] Path: {request.url.path}")
-    logger.error(f"[VALIDATION ERROR] Body: {body_str}")
-    logger.error(f"[VALIDATION ERROR] Details: {exc.errors()}")
     
     # Return validation error with details
     return JSONResponse(
