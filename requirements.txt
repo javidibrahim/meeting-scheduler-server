@@ -5,7 +5,7 @@ bidict
 blake3
 blinker
 cachetools
-certifi>=2024.2.2
+certifi
 cffi
 charset-normalizer
 click
@@ -13,8 +13,8 @@ contourpy
 cryptography
 cycler
 dnspython
-fastapi==0.110.2
-Flask==3.0.2
+fastapi
+Flask
 Flask-Cors
 Flask-SocketIO
 fonttools
@@ -67,8 +67,8 @@ typing-inspection
 typing_extensions
 uritemplate
 urllib3
-uvicorn==0.27.1
+uvicorn
 websockets
 Werkzeug
 wsproto
-backoff>=2.2.1
+backoff
