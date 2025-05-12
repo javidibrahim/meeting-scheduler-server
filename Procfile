@@ -1,2 +1,2 @@
 # TODO: Modify this Procfile to fit your needs
-web: gunicorn app:app
+web: gunicorn -c gunicorn_config.py server.main:app

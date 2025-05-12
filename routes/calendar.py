@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth/google/calendar", tags=["calendar"])
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5179")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://meeting-scheduler-client-delta.vercel.app")
 
 def init_calendar_routes(oauth_client):
     calendar_service = CalendarService(oauth_client)

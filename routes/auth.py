@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5179")
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://meeting-scheduler-client-delta.vercel.app")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://meeting-scheduler-server.onrender.com")
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
