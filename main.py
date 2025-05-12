@@ -16,7 +16,7 @@ from db.mongo import init_db
 load_dotenv()
 
 app = FastAPI()
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5179")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://meeting-scheduler-client-delta.vercel.app")
 
 app.add_middleware(
     SessionMiddleware,
@@ -24,7 +24,7 @@ app.add_middleware(
     session_cookie="google_oauth_session",
     max_age=14 * 24 * 60 * 60,
     same_site="lax",
-    https_only=False,   
+    https_only=True,   
     path="/"   
 )
 
