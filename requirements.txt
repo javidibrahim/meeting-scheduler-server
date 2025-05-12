@@ -16,7 +16,6 @@ dnspython==2.7.0
 fastapi==0.104.1
 Flask==3.0.2
 Flask-Cors==4.0.0
-Flask-MySQLdb==2.0.0
 Flask-SocketIO==5.3.6
 fonttools==4.43.1
 google-api-core==2.24.2
@@ -38,7 +37,6 @@ kiwisolver==1.4.5
 MarkupSafe==2.1.5
 matplotlib==3.8.0
 motor==3.3.2
-mysqlclient==2.2.4
 numpy==1.26.0
 oauthlib==3.2.2
 packaging==23.2
