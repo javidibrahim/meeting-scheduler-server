@@ -112,7 +112,7 @@ def get_db():
 
 async def init_db():
     """Initialize database collections and indexes"""
-    if not client or not db:
+    if client is None or db is None:
         msg = "MongoDB client or database is not initialized"
         logger.error(msg)
         raise ValueError(msg)
