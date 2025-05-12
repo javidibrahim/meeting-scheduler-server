@@ -60,11 +60,9 @@ try:
             "tlsInsecure": False,
             "connectTimeoutMS": 30000,
             "serverSelectionTimeoutMS": 30000,
-            "ssl": True,
-            "ssl_cert_reqs": ssl.CERT_REQUIRED,
-            "ssl_ca_certs": certifi.where()
+            "tls": True  # Use tls instead of ssl
         }
-        logger.info(f"MongoDB connection params: {json.dumps({k: v for k, v in client_params.items() if k != 'ssl_ca_certs'}, default=str)}")
+        logger.info(f"MongoDB connection params: {json.dumps({k: v for k, v in client_params.items()}, default=str)}")
         
         # Create the client
         client = AsyncIOMotorClient(
