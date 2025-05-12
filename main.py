@@ -16,15 +16,14 @@ from db.mongo import init_db
 load_dotenv()
 
 app = FastAPI()
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://meeting-scheduler-client-delta.vercel.app")
-
+FRONTEND_URL = os.getenv("FRONTEND_URL")
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SECRET_KEY", "your-secret-key-here"),
     session_cookie="google_oauth_session",
     max_age=14 * 24 * 60 * 60,
     same_site="lax",
-    https_only=True,   
+    https_only=os.getenv("ENVIRONMENT", "development") == "production",   
     path="/"   
 )
 
@@ -93,3 +92,5 @@ async def logout(request: Request):
     """Clear session and logout user"""
     request.session.clear()
     return {"message": "Successfully logged out"}
+
+app = app

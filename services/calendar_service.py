@@ -1,114 +1,20 @@
 import httpx
-from typing import List, Dict, Optional, Any
+from typing import List, Dict
 from fastapi import HTTPException
 import logging
 from services.event_db import EventDBService
-from db.mongo import get_db
-from services.oauth_service import OAuthService
-from datetime import datetime
+from services.calendar_db import CalendarDBService
 
 logger = logging.getLogger(__name__)
 
 class CalendarService:
-    def __init__(self, oauth_client: OAuthService):
+    def __init__(self, oauth_client):
         self.oauth_client = oauth_client
         self.event_db = EventDBService()
-        self.collection_name = "calendars"
+        self.calendar_db = CalendarDBService()
 
-    async def get_user_calendars(self, user_email: str) -> List[Dict[str, Any]]:
-        """Get all calendars for a user from database"""
-        try:
-            async with get_db() as db:
-                collection = db[self.collection_name]
-                cursor = collection.find({"user_email": user_email})
-                calendars = await cursor.to_list(length=None)
-                for calendar in calendars:
-                    calendar["_id"] = str(calendar["_id"])
-                return calendars
-        except Exception as e:
-            logger.error(f"Error getting calendars for user {user_email}: {str(e)}")
-            raise
-
-    async def save_calendar(self, calendar_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Save or update a calendar"""
-        try:
-            async with get_db() as db:
-                collection = db[self.collection_name]
-                calendar_data["updated_at"] = datetime.utcnow()
-                
-                # Try to find existing calendar
-                existing = await collection.find_one({
-                    "user_email": calendar_data["user_email"],
-                    "calendar_id": calendar_data["calendar_id"]
-                })
-                
-                if existing:
-                    # Update existing calendar
-                    result = await collection.update_one(
-                        {
-                            "user_email": calendar_data["user_email"],
-                            "calendar_id": calendar_data["calendar_id"]
-                        },
-                        {"$set": calendar_data}
-                    )
-                    if result.modified_count > 0:
-                        calendar = await collection.find_one({
-                            "user_email": calendar_data["user_email"],
-                            "calendar_id": calendar_data["calendar_id"]
-                        })
-                        if calendar:
-                            calendar["_id"] = str(calendar["_id"])
-                        return calendar
-                else:
-                    # Create new calendar
-                    calendar_data["created_at"] = datetime.utcnow()
-                    result = await collection.insert_one(calendar_data)
-                    calendar_data["_id"] = str(result.inserted_id)
-                    return calendar_data
-                
-                raise Exception("Failed to save calendar")
-        except Exception as e:
-            logger.error(f"Error saving calendar: {str(e)}")
-            raise
-
-    async def delete_calendar(self, user_email: str, calendar_id: str) -> bool:
-        """Delete a calendar and its events"""
-        try:
-            async with get_db() as db:
-                collection = db[self.collection_name]
-                # Delete calendar
-                result = await collection.delete_one({
-                    "user_email": user_email,
-                    "calendar_id": calendar_id
-                })
-                
-                if result.deleted_count > 0:
-                    # Delete associated events
-                    await self.event_db.delete_calendar_events(calendar_id)
-                    return True
-                return False
-        except Exception as e:
-            logger.error(f"Error deleting calendar: {str(e)}")
-            raise
-
-    async def get_calendar(self, user_email: str, calendar_id: str) -> Optional[Dict[str, Any]]:
-        """Get a specific calendar"""
-        try:
-            async with get_db() as db:
-                collection = db[self.collection_name]
-                calendar = await collection.find_one({
-                    "user_email": user_email,
-                    "calendar_id": calendar_id
-                })
-                if calendar:
-                    calendar["_id"] = str(calendar["_id"])
-                return calendar
-        except Exception as e:
-            logger.error(f"Error getting calendar: {str(e)}")
-            raise
-
-    async def sync_calendars(self, token: Dict, user_email: str) -> List[Dict]:
-        """Sync calendars from Google Calendar API and store in database"""
+    async def get_calendars(self, token: Dict, user_email: str) -> List[Dict]:
+        """Main method: returns list of connected calendars and stores their events"""
         try:
             async with httpx.AsyncClient() as client:
                 headers = self._get_auth_headers(token)
@@ -118,23 +24,12 @@ class CalendarService:
                 processed_calendars = await self._process_calendars(client, headers, calendars, token, user_info)
                 
                 # Store calendars in database
-                for calendar in processed_calendars:
-                    await self.save_calendar({
-                        "user_email": user_email,
-                        "calendar_id": calendar["id"],
-                        "name": calendar["name"],
-                        "email": calendar["email"],
-                        "access_role": calendar["accessRole"],
-                        "is_read_only": calendar["isReadOnly"],
-                        "access_token": calendar["accessToken"],
-                        "refresh_token": calendar.get("refreshToken"),
-                        "events_count": calendar["eventsCount"]
-                    })
+                await self.calendar_db.save_calendars(user_email, processed_calendars)
                 
                 return processed_calendars
         except Exception as e:
-            logger.error(f"Error in sync_calendars: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Failed to sync calendars: {str(e)}")
+            logger.error(f"Error in get_calendars: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch calendars: {str(e)}")
 
     def _get_auth_headers(self, token: Dict) -> Dict:
         return {'Authorization': f'Bearer {token["access_token"]}'}
@@ -174,8 +69,7 @@ class CalendarService:
                     events = await self._fetch_calendar_events(client, headers, calendar['id'])
                     if events:
                         await self.event_db.save_events(calendar['id'], events)
-                        logger.info(f"Stored {len(events)} events for calendar {calendar['summary']}")
-                    
+                 
                     results.append({
                         'id': calendar['id'],
                         'name': calendar['summary'],
@@ -210,10 +104,19 @@ class CalendarService:
             logger.info(f"Deleted all events for calendar {calendar_id}")
             
             # Then delete the calendar
-            deleted = await self.delete_calendar(user_email, calendar_id)
+            deleted = await self.calendar_db.delete_calendar(calendar_id, user_email)
             logger.info(f"Deleted calendar {calendar_id} for user {user_email}")
             
             return deleted
         except Exception as e:
             logger.error(f"Error disconnecting calendar {calendar_id}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to disconnect calendar: {str(e)}")
+
+    async def get_stored_calendars(self, user_email: str) -> List[Dict]:
+        """Get calendars from database"""
+        try:
+            calendars = await self.calendar_db.get_user_calendars(user_email)
+            return [cal.dict() for cal in calendars]
+        except Exception as e:
+            logger.error(f"Error getting stored calendars for user {user_email}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to get calendars: {str(e)}")

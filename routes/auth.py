@@ -7,6 +7,7 @@ from services.user_db import UserService
 from google_auth_oauthlib.flow import Flow
 from datetime import datetime
 from urllib.parse import quote
+import secrets
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5179")
-BACKEND_URL = os.getenv("BACKEND_URL", "https://meeting-scheduler-server.onrender.com")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
@@ -29,11 +30,16 @@ def init_auth_routes(oauth_client):
     async def google_auth(request: Request):
         try:
             redirect_uri = f"{BACKEND_URL}/auth/google/callback"
+            # Generate a random state parameter
+            state = secrets.token_urlsafe(32)
+            request.session['oauth_state'] = state
+            
             return await oauth_client.google.authorize_redirect(
                 request,
                 redirect_uri,
                 access_type='offline',
-                prompt='consent'
+                prompt='consent',
+                state=state
             )
         except Exception as e:
             logger.error(f"Google auth error: {str(e)}")
@@ -42,6 +48,18 @@ def init_auth_routes(oauth_client):
     @router.get("/google/callback")
     async def google_callback(request: Request):
         try:
+            # Verify state parameter
+            state = request.session.pop('oauth_state', None)
+            if not state:
+                logger.error("No state parameter found in session")
+                return RedirectResponse(url=f'{FRONTEND_URL}/?error=auth_failed&message=Invalid state parameter')
+            
+            # Get the state from the callback
+            callback_state = request.query_params.get('state')
+            if not callback_state or callback_state != state:
+                logger.error(f"State mismatch: session={state}, callback={callback_state}")
+                return RedirectResponse(url=f'{FRONTEND_URL}/?error=auth_failed&message=State parameter mismatch')
+            
             token = await oauth_client.google.authorize_access_token(request)
             async with httpx.AsyncClient() as client:
                 userinfo_response = await client.get(

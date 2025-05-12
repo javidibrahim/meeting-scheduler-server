@@ -11,181 +11,123 @@ from bson import ObjectId
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def send_meeting_notification(advisor_email, client_email, scheduled_date, duration, answers=None, client_linkedin=None, scheduling_link_id=None):
-    """
-    Send an email notification to the advisor about a new scheduled meeting
-    
-    Parameters:
-    - advisor_email: The email of the advisor who will receive the notification
-    - client_email: The email of the client who booked the meeting
-    - scheduled_date: The datetime of the scheduled meeting
-    - duration: The duration of the meeting in minutes
-    - answers: List of client's answers to custom questions (optional)
-    - client_linkedin: The client's LinkedIn profile URL (optional)
-    - scheduling_link_id: The ID of the scheduling link used for booking (optional)
-    
-    Returns:
-    - bool: True if the email was sent successfully, False otherwise
-    """
-    logger.info(f"Preparing email notification for advisor: {advisor_email}")
-    logger.info(f"Meeting details: client={client_email}, time={scheduled_date}, duration={duration}min")
-    
-    try:
-        # SMTP server settings - from environment variables
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", "587"))
-        smtp_username = os.getenv("SMTP_USERNAME")
-        smtp_password = os.getenv("SMTP_PASSWORD")
+class EmailService:
+    def __init__(self):
+        self.collection = db["schedule_links"]
+        self.smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+        self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        self.smtp_username = os.getenv("SMTP_USERNAME")
+        self.smtp_password = os.getenv("SMTP_PASSWORD")
+
+    async def send_meeting_notification(
+        self,
+        advisor_email: str,
+        client_email: str,
+        scheduled_date: datetime,
+        duration: int,
+        answers: list = None,
+        client_linkedin: str = None,
+        scheduling_link_id: str = None
+    ) -> bool:
+        """
+        Send an email notification to the advisor about a new scheduled meeting
         
-        # Debug information for SMTP configuration
-        logger.info(f"Using SMTP server: {smtp_server}:{smtp_port}")
-        logger.info(f"SMTP username configured: {'Yes' if smtp_username else 'No'}")
-        logger.info(f"SMTP password configured: {'Yes' if smtp_password else 'No'}")
+        Parameters:
+        - advisor_email: The email of the advisor who will receive the notification
+        - client_email: The email of the client who booked the meeting
+        - scheduled_date: The datetime of the scheduled meeting
+        - duration: The duration of the meeting in minutes
+        - answers: List of client's answers to custom questions (optional)
+        - client_linkedin: The client's LinkedIn profile URL (optional)
+        - scheduling_link_id: The ID of the scheduling link used for booking (optional)
         
-        # If email credentials are not configured, log and return
-        if not smtp_username or not smtp_password:
-            logger.warning("Email notification skipped: SMTP credentials not configured")
-            logger.warning("Please set the following environment variables: SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD")
-            return False
+        Returns:
+        - bool: True if the email was sent successfully, False otherwise
+        """
+        logger.info(f"Preparing email notification for advisor: {advisor_email}")
+        logger.info(f"Meeting details: client={client_email}, time={scheduled_date}, duration={duration}min")
         
-        # Format the date for display
+        # Get scheduling link data if ID is provided
+        link_data = None
+        if scheduling_link_id:
+            try:
+                link_data = await self.collection.find_one({"_id": ObjectId(scheduling_link_id)})
+                if link_data:
+                    logger.info(f"Found scheduling link: {link_data.get('slug')}")
+                else:
+                    logger.warning(f"Scheduling link with ID {scheduling_link_id} not found")
+            except Exception as e:
+                logger.error(f"Error retrieving scheduling link {scheduling_link_id}: {str(e)}")
+        
+        # Format date
         formatted_date = scheduled_date.strftime("%A, %B %d, %Y at %I:%M %p")
         
-        # Create message
+        # Build email subject
+        subject = f"New meeting scheduled for {formatted_date}"
+        
+        # Build email content
         message = MIMEMultipart()
-        message["From"] = smtp_username
+        message["From"] = self.smtp_username
         message["To"] = advisor_email
-        message["Subject"] = "New Meeting Scheduled"
+        message["Subject"] = subject
         
-        logger.info(f"Email subject: {message['Subject']}")
-        
-        # Create email body
-        body = f"""
+        # Email body
+        html = f"""
         <html>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 5px;">
-                <h2 style="color: #4a5568; border-bottom: 1px solid #eee; padding-bottom: 10px;">New Meeting Scheduled</h2>
-                <p>A new meeting has been scheduled with <strong>{client_email}</strong></p>
-                
-                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0;">
-                    <h3 style="margin-top: 0; color: #4a5568;">Meeting Details:</h3>
-                    <ul style="padding-left: 20px;">
-                        <li><strong>Date and Time:</strong> {formatted_date}</li>
-                        <li><strong>Duration:</strong> {duration} minutes</li>
-                        <li><strong>Client Email:</strong> {client_email}</li>
-                        {f'<li><strong>LinkedIn Profile:</strong> <a href="{client_linkedin}">{client_linkedin}</a></li>' if client_linkedin else ''}
-                    </ul>
-                </div>
+        <body>
+            <h2>New Meeting Scheduled</h2>
+            <p>A new meeting has been scheduled with {client_email}.</p>
+            <h3>Meeting Details:</h3>
+            <ul>
+                <li><strong>Date and Time:</strong> {formatted_date}</li>
+                <li><strong>Duration:</strong> {duration} minutes</li>
+                <li><strong>Client Email:</strong> {client_email}</li>
         """
         
-        # Add answers to custom questions if provided
-        if answers and len(answers) > 0:
-            logger.info(f"Including {len(answers)} custom question answers in email")
-            
-            # Try to find the customQuestions from the scheduling link
-            custom_questions = []
-            if scheduling_link_id:
-                try:
-                    # Convert string ID to ObjectId if necessary
-                    link_id = scheduling_link_id
-                    if isinstance(scheduling_link_id, str):
-                        link_id = ObjectId(scheduling_link_id)
-                    
-                    link = await db["schedule_links"].find_one({"_id": link_id})
-                    if link and "customQuestions" in link:
-                        custom_questions = link.get("customQuestions", [])
-                        logger.info(f"Found {len(custom_questions)} custom questions from scheduling link")
-                except Exception as e:
-                    logger.error(f"Error retrieving custom questions: {str(e)}")
-            
-            # Only include the section if we have answers
-            body += """
-            <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0;">
-                <h3 style="margin-top: 0; color: #4a5568;">Client's Responses:</h3>
-                <ul style="padding-left: 20px;">
-            """
-            
-            answer_list = []
-            for answer in answers:
-                try:
-                    # Try dictionary access first
-                    answer_text = answer.get('answer', '')
-                    question_id = answer.get('question_id', '')
-                except AttributeError:
-                    # If it's a Pydantic model, access attributes directly
-                    answer_text = getattr(answer, 'answer', '')
-                    question_id = getattr(answer, 'question_id', '')
-                    
-                # Extract the index from question_id (assume format q0, q1, etc.)
-                try:
-                    if question_id.startswith('q'):
-                        index = int(question_id[1:])
-                    else:
-                        index = int(question_id)
-                except (ValueError, IndexError):
-                    index = -1
-                    
-                answer_list.append((index, answer_text))
-            
-            # Sort answers by the extracted index
-            answer_list.sort(key=lambda x: x[0])
-            
-            # Match answers with questions or use simple labels
-            for i, (index, answer_text) in enumerate(answer_list):
-                if i < len(custom_questions):
-                    # Use the actual question text
-                    question_text = custom_questions[i]
-                else:
-                    # Fallback to a generic question label
-                    question_text = f"Question {i+1}"
-                
-                body += f'<li><strong>{question_text}:</strong> {answer_text}</li>'
-                
-            body += """
-                </ul>
-            </div>
-            """
+        # Add LinkedIn profile if available
+        if client_linkedin:
+            html += f'<li><strong>LinkedIn Profile:</strong> <a href="{client_linkedin}">{client_linkedin}</a></li>'
         
-        body += """
-                <p style="font-size: 0.9em; color: #718096; margin-top: 30px; text-align: center;">
-                    This is an automated notification from your scheduling system.
-                </p>
-            </div>
+        # Add scheduling link details if available
+        if link_data:
+            link_title = link_data.get("title", "Unknown")
+            html += f'<li><strong>Scheduling Link Used:</strong> {link_title}</li>'
+        
+        # Add answers to custom questions if available
+        if answers and len(answers) > 0:
+            html += """
+            <h3>Client's Responses:</h3>
+            <ul>
+            """
+            for answer in answers:
+                html += f'<li><strong>{answer.get("question", "")}:</strong> {answer.get("answer", "")}</li>'
+            html += "</ul>"
+        
+        html += """
+            </ul>
+            <p>This meeting has been automatically added to your calendar.</p>
         </body>
         </html>
         """
         
-        message.attach(MIMEText(body, "html"))
+        message.attach(MIMEText(html, "html"))
         
-        # Connect to SMTP server and send email
-        logger.info(f"Connecting to SMTP server: {smtp_server}:{smtp_port}")
-        
+        # Send email
         try:
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                logger.info("SMTP connection established, initiating TLS")
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
                 server.starttls()
-                
-                logger.info(f"Attempting login with username: {smtp_username}")
-                server.login(smtp_username, smtp_password)
-                
-                logger.info(f"Sending email to: {advisor_email}")
+                server.login(self.smtp_username, self.smtp_password)
                 server.send_message(message)
-                logger.info("Email sent successfully")
-        except smtplib.SMTPAuthenticationError:
-            logger.error("SMTP authentication failed - check username and password")
+                logger.info(f"Meeting notification email sent to {advisor_email}")
+                return True
+        except Exception as e:
+            logger.error(f"Failed to send meeting notification email: {str(e)}")
             return False
-        except smtplib.SMTPException as smtp_err:
-            logger.error(f"SMTP error occurred: {str(smtp_err)}")
-            return False
-        except Exception as conn_err:
-            logger.error(f"Connection error: {str(conn_err)}")
-            return False
-            
-        logger.info(f"Email notification successfully sent to {advisor_email}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to send email notification due to unexpected error: {str(e)}")
-        # Log the full stack trace for debugging
-        import traceback
-        logger.error(f"Stack trace: {traceback.format_exc()}")
-        return False 
+
+# Create an instance of EmailService
+email_service = EmailService()
+
+# Expose the send_meeting_notification function
+async def send_meeting_notification(*args, **kwargs):
+    """Wrapper function to call send_meeting_notification on the email_service instance"""
+    return await email_service.send_meeting_notification(*args, **kwargs) 

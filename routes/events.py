@@ -43,11 +43,11 @@ def init_events_routes(oauth_client):
                 # Convert to simple response format
                 return [
                     {
-                        "id": event.id,
-                        "summary": event.summary,
-                        "start": event.start_time.isoformat(),
-                        "end": event.end_time.isoformat(),
-                        "status": event.status
+                        "id": event["id"],
+                        "summary": event["summary"],
+                        "start": event["start_time"].isoformat(),
+                        "end": event["end_time"].isoformat(),
+                        "status": event["status"]
                     }
                     for event in events
                 ]
