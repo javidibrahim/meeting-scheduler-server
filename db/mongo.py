@@ -12,21 +12,20 @@ MONGO_URI = os.getenv("MONGO_URI")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configure MongoDB client with SSL
-client = AsyncIOMotorClient(
-    MONGO_URI,
-    tls=True,
-    tlsCAFile=certifi.where(),
-    tlsAllowInvalidCertificates=False,
-    tlsAllowInvalidHostnames=False,
-    serverSelectionTimeoutMS=30000,
-    connectTimeoutMS=30000,
-    socketTimeoutMS=30000,
-    maxPoolSize=50,
-    minPoolSize=10,
-    retryWrites=True,
-    retryReads=True
-)
+# Configure MongoDB client
+client_params = {
+    "serverSelectionTimeoutMS": 30000,
+    "connectTimeoutMS": 30000,
+    "socketTimeoutMS": 30000,
+    "maxPoolSize": 50,
+    "minPoolSize": 10,
+    "retryWrites": True,
+    "retryReads": True,
+    "tls": True,
+    "tlsCAFile": certifi.where()
+}
+
+client = AsyncIOMotorClient(MONGO_URI, **client_params)
 
 # Add connection error handling
 async def verify_connection():
@@ -38,7 +37,6 @@ async def verify_connection():
     except Exception as e:
         logger.error(f"MongoDB connection error: {str(e)}")
         logger.error(f"MongoDB URI (masked): {MONGO_URI.replace('mongodb+srv://', 'mongodb+srv://***:***@')}")
-        logger.error(f"SSL/TLS settings: tls={client.options.tls}, tlsCAFile={client.options.tls_ca_file}")
         raise
 
 db = client["meeting-scheduler"]

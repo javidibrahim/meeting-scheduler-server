@@ -15,21 +15,58 @@ from db.mongo import init_db
 # Load environment variables
 load_dotenv()
 
-app = FastAPI()
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# Environment variables
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
+
+logger.info(f"Starting application in {ENVIRONMENT} environment")
+logger.info(f"FRONTEND_URL set to: {FRONTEND_URL}")
+
+app = FastAPI()
+
+# Session middleware configuration
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SECRET_KEY", "your-secret-key-here"),
+    secret_key=SECRET_KEY,
     session_cookie="google_oauth_session",
-    max_age=14 * 24 * 60 * 60,
+    max_age=14 * 24 * 60 * 60,  # 14 days
     same_site="lax",
-    https_only=os.getenv("ENVIRONMENT", "development") == "production",   
+    https_only=ENVIRONMENT == "production",
     path="/"   
 )
 
+# CORS configuration
+if ENVIRONMENT == "production":
+    # In production, only allow the specified frontend URL
+    origins = [FRONTEND_URL]
+    logger.info(f"CORS configured for production with origins: {origins}")
+else:
+    # In development, allow localhost with various ports
+    origins = [
+        FRONTEND_URL,
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+        "http://localhost:5176",
+        "http://localhost:5177",
+        "http://localhost:5178",
+        "http://localhost:5179",
+        "http://localhost:8000",
+    ]
+    logger.info(f"CORS configured for development with multiple origins")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -77,7 +114,9 @@ init_routes(app, oauth)
 @app.on_event("startup")
 async def startup_event():
     """Initialize database on startup"""
+    logger.info("Starting application and initializing database")
     await init_db()
+    logger.info("Application startup complete")
 
 @app.get("/me")
 async def get_user(request: Request):
@@ -93,4 +132,11 @@ async def logout(request: Request):
     request.session.clear()
     return {"message": "Successfully logged out"}
 
+# Health check endpoint for Render
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    return {"status": "ok"}
+
+# Make app importable for ASGI servers
 app = app
