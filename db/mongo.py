@@ -55,12 +55,9 @@ try:
         # Create MongoDB client with minimal options
         client_params = {
             "tlsCAFile": certifi.where(),
-            "tlsAllowInvalidCertificates": False,
-            "tlsAllowInvalidHostnames": False,
-            "tlsInsecure": False,
+            "tls": True,
             "connectTimeoutMS": 30000,
-            "serverSelectionTimeoutMS": 30000,
-            "tls": True  # Use tls instead of ssl
+            "serverSelectionTimeoutMS": 30000
         }
         logger.info(f"MongoDB connection params: {json.dumps({k: v for k, v in client_params.items()}, default=str)}")
         
