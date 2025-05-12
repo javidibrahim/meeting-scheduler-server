@@ -6,94 +6,102 @@ import logging
 import certifi
 import ssl
 import re
+import urllib.parse
+import sys
+import json
 
+# Setup detailed logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
+# Load environment variables
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Log environment info
+logger.info(f"Python version: {sys.version}")
+logger.info(f"Running in environment: {os.getenv('ENVIRONMENT', 'development')}")
+logger.info(f"Certifi CA file path: {certifi.where()}")
+logger.info(f"MongoDB URI exists: {bool(MONGO_URI)}")
 
-# Try to fix common MongoDB URI issues
-def get_fixed_uri(uri):
-    if not uri:
-        logger.error("MongoDB URI is not set")
-        return None
+if MONGO_URI:
+    # Log masked version of the URI for debugging
+    masked_uri = re.sub(r'://([^:]+):([^@]+)@', r'://***:***@', MONGO_URI)
+    logger.info(f"MongoDB URI (masked): {masked_uri}")
     
-    # Create a masked version for logging
-    masked_uri = re.sub(r'://([^:]+):([^@]+)@', r'://***:***@', uri)
-    logger.info(f"Original URI format (masked): {masked_uri}")
-    
-    # Check if it's already using the new connection string format
-    if "mongodb+srv://" in uri and "retryWrites=true" in uri:
-        # Try removing the appName parameter which might cause issues
-        if "appName=" in uri:
-            new_uri = re.sub(r'&appName=[^&]+', '', uri)
-            if new_uri != uri:
-                logger.info("Removed appName parameter from connection string")
-                uri = new_uri
-    
-    # Add srv connection options if missing
-    if "mongodb+srv://" in uri and "?" not in uri:
-        uri += "/?retryWrites=true&w=majority"
-        logger.info("Added standard parameters to srv connection string")
-    
-    # Log the masked modified URI
-    masked_uri = re.sub(r'://([^:]+):([^@]+)@', r'://***:***@', uri)
-    logger.info(f"Using modified URI format (masked): {masked_uri}")
-    
-    return uri
-
-# Configure MongoDB client with permissive SSL settings for testing
-try:
-    # Try to fix common URI issues
-    fixed_uri = get_fixed_uri(MONGO_URI)
-    
-    if fixed_uri:
-        # Create a client with very permissive settings for testing
-        client = AsyncIOMotorClient(
-            fixed_uri,
-            tlsAllowInvalidCertificates=True,
-            tlsInsecure=True,
-            connectTimeoutMS=10000,
-            socketTimeoutMS=10000,
-            serverSelectionTimeoutMS=10000,
-            ssl=True
-        )
-        logger.info("MongoDB client initialized with permissive SSL settings")
+    # Check URI format
+    if "mongodb+srv://" in MONGO_URI:
+        logger.info("Using MongoDB SRV connection string format")
+    elif "mongodb://" in MONGO_URI:
+        logger.info("Using MongoDB standard connection string format")
     else:
-        # Create a dummy client that will fail gracefully
-        client = AsyncIOMotorClient("mongodb://localhost:27017")
-        logger.warning("Using fallback MongoDB client due to invalid URI")
+        logger.error("MongoDB URI is not in a recognized format")
+
+# Configure MongoDB client
+try:
+    # Check if we have a valid MongoDB URI
+    if not MONGO_URI:
+        logger.error("MONGO_URI environment variable is not set")
+        client = None
+        db = None
+    else:
+        # Log connection attempt
+        logger.info("Attempting to create MongoDB client")
+        
+        # Create MongoDB client with minimal options
+        client_params = {
+            "tlsCAFile": certifi.where(),
+            "connectTimeoutMS": 30000,
+            "serverSelectionTimeoutMS": 30000
+        }
+        logger.info(f"MongoDB connection params: {json.dumps(client_params, default=str)}")
+        
+        # Create the client
+        client = AsyncIOMotorClient(
+            MONGO_URI,
+            **client_params
+        )
+        
+        # Get database instance
+        logger.info("Getting database instance")
+        db = client.get_database("meeting-scheduler")
+        logger.info("MongoDB client and database initialized")
 except Exception as e:
-    logger.error(f"Error initializing MongoDB client: {str(e)}")
-    # Create a dummy client that will fail gracefully
-    client = AsyncIOMotorClient("mongodb://localhost:27017")
-    logger.warning("Using fallback MongoDB client due to exception")
+    logger.exception(f"Error initializing MongoDB client: {str(e)}")
+    client = None
+    db = None
 
-# Initialize the database object
-db = client.get_database("meeting-scheduler") if MONGO_URI else None
-
-# Add connection verification function
 async def verify_connection():
     """Verify MongoDB connection and log detailed error if it fails"""
-    if not MONGO_URI:
-        logger.error("MongoDB URI is not set")
-        raise ValueError("MongoDB URI is not set")
-        
+    if not client:
+        logger.error("MongoDB client is not initialized")
+        raise ValueError("MongoDB client is not initialized")
+
+    logger.info("Verifying MongoDB connection...")    
     try:
-        # Try a simple ping command
-        await client.admin.command('ping')
-        logger.info("Successfully connected to MongoDB")
+        # Try a simple ping command with timeout
+        logger.debug("Sending ping command to MongoDB")
+        start_time = asyncio.get_event_loop().time()
+        await asyncio.wait_for(client.admin.command('ping'), timeout=10.0)
+        end_time = asyncio.get_event_loop().time()
+        logger.info(f"Successfully connected to MongoDB (ping took {end_time - start_time:.2f}s)")
         return True
+    except asyncio.TimeoutError:
+        logger.error("MongoDB ping command timed out after 10 seconds")
+        raise
     except Exception as e:
-        logger.error(f"MongoDB connection error: {str(e)}")
-        # Log some details for debugging
-        if MONGO_URI:
-            masked_uri = re.sub(r'://([^:]+):([^@]+)@', r'://***:***@', MONGO_URI)
-            logger.error(f"MongoDB URI (masked): {masked_uri}")
-        else:
-            logger.error("MongoDB URI is not set")
+        logger.exception(f"MongoDB connection error: {str(e)}")
+        # Log detailed connection info for debugging
+        if client:
+            try:
+                logger.debug(f"MongoDB client: {client}")
+                logger.debug(f"MongoDB nodes: {client.nodes}")
+            except:
+                pass
         raise
 
 def get_db():
@@ -104,24 +112,31 @@ def get_db():
 
 async def init_db():
     """Initialize database collections and indexes"""
-    if not MONGO_URI:
-        logger.error("MongoDB URI is not set, skipping database initialization")
-        raise ValueError("MongoDB URI is not set")
+    if not client or not db:
+        msg = "MongoDB client or database is not initialized"
+        logger.error(msg)
+        raise ValueError(msg)
         
     try:
         # Test the connection
+        logger.info("Verifying connection before initializing database")
         await verify_connection()
         
         # Create a unique index on slug+userId for schedule_links collection
+        logger.info("Creating index on schedule_links collection")
         await db.schedule_links.create_index(
             [("slug", 1), ("userId", 1)], 
             unique=True
         )
         logger.info("Created index on schedule_links collection")
     except Exception as e:
-        logger.error(f"Database initialization error: {str(e)}")
+        logger.exception(f"Database initialization error: {str(e)}")
         raise
 
 # Run initialization in a new event loop if this file is executed directly
 if __name__ == "__main__":
-    asyncio.run(init_db())
+    if client and db:
+        logger.info("Running database initialization from main")
+        asyncio.run(init_db())
+    else:
+        logger.error("Cannot initialize database - client or db not initialized")
