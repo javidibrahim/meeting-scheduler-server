@@ -9,9 +9,14 @@ import os
 from dotenv import load_dotenv
 from routes import init_routes
 from db.mongo import init_db
+import logging
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 FRONTEND_URL = os.getenv("FRONTEND_URL")
@@ -85,5 +90,17 @@ async def logout(request: Request):
     """Clear session and logout user"""
     request.session.clear()
     return {"message": "Successfully logged out"}
+
+@app.get("/")
+async def root():
+    """Root endpoint for health checks"""
+    logger.info("Health check endpoint accessed")
+    return {"status": "ok", "message": "API is running"}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Render"""
+    logger.info("Health check endpoint accessed")
+    return {"status": "ok"}
 
 app = app

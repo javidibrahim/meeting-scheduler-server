@@ -1,8 +1,11 @@
 import multiprocessing
 import os
 
+# Use PORT environment variable for Render compatibility
+port = os.getenv("PORT", "8000")
+
 # Bind to 0.0.0.0 to make the server available externally
-bind = "0.0.0.0:" + os.getenv("PORT", "8000")
+bind = f"0.0.0.0:{port}"
 
 # Use the recommended number of workers based on CPU cores
 workers = multiprocessing.cpu_count() * 2 + 1

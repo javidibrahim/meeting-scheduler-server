@@ -12,17 +12,19 @@ MONGO_URI = os.getenv("MONGO_URI")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configure MongoDB client
+# Strip out malformed credential part if present
+if MONGO_URI and "ibjavid:oIT2oP0kczk4n7BG@" in MONGO_URI:
+    # Fix the connection string format
+    MONGO_URI = MONGO_URI.replace("ibjavid:oIT2oP0kczk4n7BG@", "")
+    logger.info("Corrected the MongoDB connection string format")
+
+# Configure MongoDB client with simpler TLS settings
 client_params = {
     "serverSelectionTimeoutMS": 30000,
     "connectTimeoutMS": 30000,
-    "socketTimeoutMS": 30000,
-    "maxPoolSize": 50,
-    "minPoolSize": 10,
     "retryWrites": True,
-    "retryReads": True,
-    "tls": True,
-    "tlsCAFile": certifi.where()
+    "tlsCAFile": certifi.where(),
+    "tls": True
 }
 
 client = AsyncIOMotorClient(MONGO_URI, **client_params)
