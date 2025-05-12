@@ -5,7 +5,7 @@ bidict
 blake3
 blinker
 cachetools
-certifi
+certifi>=2024.2.2
 cffi
 charset-normalizer
 click
@@ -71,3 +71,4 @@ uvicorn==0.27.1
 websockets
 Werkzeug
 wsproto
+backoff>=2.2.1
