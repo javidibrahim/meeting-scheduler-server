@@ -218,10 +218,16 @@ async def db_status():
 async def get_user(request: Request, _=Depends(require_db)):
     """Get current user info from session"""
     logger.info("User info endpoint accessed")
+    logger.info(f"Request headers: {dict(request.headers)}")
+    logger.info(f"Request cookies: {request.cookies}")
+    logger.info(f"Session data: {request.session}")
+    
     user = request.session.get('user')
     if not user:
-        logger.warning("User not authenticated")
+        logger.warning("User not authenticated - no user in session")
+        logger.warning(f"Session ID: {request.session.get('id', 'no session id')}")
         raise HTTPException(status_code=401, detail="Not authenticated")
+    
     logger.info(f"Returning user info for user: {user.get('email', 'unknown')}")
     return user
 
