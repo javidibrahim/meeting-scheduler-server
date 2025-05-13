@@ -54,6 +54,10 @@ def init_auth_routes(oauth_client):
     @router.get("/google/callback")
     async def google_callback(request: Request):
         try:
+            logger.info("Google callback received")
+            logger.info(f"Request cookies: {request.cookies}")
+            logger.info(f"Session data before: {request.session}")
+            
             # Verify state parameter
             state = request.session.pop('oauth_state', None)
             if not state:
@@ -67,6 +71,8 @@ def init_auth_routes(oauth_client):
                 return RedirectResponse(url=urljoin(FRONTEND_URL, "/?error=auth_failed&message=State parameter mismatch"))
             
             token = await oauth_client.google.authorize_access_token(request)
+            logger.info("Successfully obtained access token")
+            
             async with httpx.AsyncClient() as client:
                 userinfo_response = await client.get(
                     "https://www.googleapis.com/oauth2/v2/userinfo",
@@ -75,6 +81,7 @@ def init_auth_routes(oauth_client):
                 if not userinfo_response.is_success:
                     raise Exception(f"Failed to get user info: {userinfo_response.text}")
                 userinfo = userinfo_response.json()
+                logger.info(f"Retrieved user info for: {userinfo['email']}")
 
                 user = await user_service.create_or_update_google_user(
                     email=userinfo["email"],
@@ -89,21 +96,47 @@ def init_auth_routes(oauth_client):
                 if not user:
                     raise Exception("Failed to create/update user")
 
-                request.session["user"] = {
-                    "email": user["email"],
-                    "name": userinfo.get("name"),
-                    "picture": userinfo.get("picture")
+                # Set session data
+                session_data = {
+                    "user": {
+                        "email": user["email"],
+                        "name": userinfo.get("name"),
+                        "picture": userinfo.get("picture")
+                    }
                 }
-
-                # Construct redirect URLs based on environment
-                dashboard_url = urljoin(FRONTEND_URL, "/dashboard")
-                error_url = urljoin(FRONTEND_URL, "/?error=auth_failed")
+                request.session.update(session_data)
+                logger.info(f"Session data after update: {request.session}")
                 
-                logger.info(f"Redirecting to dashboard URL: {dashboard_url}")
-                return RedirectResponse(url=dashboard_url)
+                # Create response with explicit cookie settings
+                response = RedirectResponse(url=urljoin(FRONTEND_URL, "/dashboard"))
+                
+                # Log the response headers
+                logger.info("Response headers before setting cookie:")
+                for key, value in response.headers.items():
+                    logger.info(f"{key}: {value}")
+                
+                # Ensure cookie is set with correct attributes
+                if "set-cookie" in response.headers:
+                    cookie = response.headers["set-cookie"]
+                    logger.info(f"Original cookie: {cookie}")
+                    
+                    # Add required attributes for cross-domain cookies
+                    if "SameSite=None" not in cookie:
+                        cookie = cookie.replace("SameSite=Lax", "SameSite=None")
+                    if "Secure" not in cookie:
+                        cookie += "; Secure"
+                    if backend_domain and f"Domain={backend_domain}" not in cookie:
+                        cookie += f"; Domain={backend_domain}"
+                    
+                    response.headers["set-cookie"] = cookie
+                    logger.info(f"Modified cookie: {cookie}")
+                
+                logger.info("Redirecting to dashboard")
+                return response
 
         except Exception as e:
             logger.error(f"Error in Google callback: {str(e)}")
+            logger.error(f"Full exception details: {repr(e)}")
             error_url = urljoin(FRONTEND_URL, "/?error=auth_failed")
             return RedirectResponse(url=error_url)
 
