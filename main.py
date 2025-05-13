@@ -62,20 +62,9 @@ logger.info(f"Frontend URL: {FRONTEND_URL}")
 logger.info(f"Backend URL: {BACKEND_URL}")
 logger.info(f"MongoDB URI set: {bool(os.getenv('MONGO_URI'))}")
 
-# Configure session middleware with proper domain settings
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=SECRET_KEY,
-    session_cookie="session",
-    max_age=14 * 24 * 60 * 60,  # 14 days
-    same_site="none" if ENVIRONMENT == "production" else "lax",
-    https_only=ENVIRONMENT == "production",
-    path="/",
-    domain=backend_domain if ENVIRONMENT == "production" else None  # Use exact backend domain
-)
-
 # Configure CORS with proper settings for cross-domain requests
 origins = [FRONTEND_URL]
+logger.info(f"Configuring CORS with origins: {origins}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -86,6 +75,59 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600
 )
+
+# Add middleware to log CORS preflight requests
+@app.middleware("http")
+async def log_cors_preflight(request: Request, call_next):
+    if request.method == "OPTIONS":
+        logger.info("CORS preflight request received")
+        logger.info(f"Origin: {request.headers.get('origin')}")
+        logger.info(f"Access-Control-Request-Method: {request.headers.get('access-control-request-method')}")
+        logger.info(f"Access-Control-Request-Headers: {request.headers.get('access-control-request-headers')}")
+    response = await call_next(request)
+    if request.method == "OPTIONS":
+        logger.info("CORS preflight response headers:")
+        logger.info(f"Access-Control-Allow-Origin: {response.headers.get('access-control-allow-origin')}")
+        logger.info(f"Access-Control-Allow-Credentials: {response.headers.get('access-control-allow-credentials')}")
+        logger.info(f"Access-Control-Allow-Methods: {response.headers.get('access-control-allow-methods')}")
+    return response
+
+# Configure session middleware with proper domain settings
+session_middleware_config = {
+    "secret_key": SECRET_KEY,
+    "session_cookie": "session",
+    "max_age": 14 * 24 * 60 * 60,  # 14 days
+    "same_site": "none" if ENVIRONMENT == "production" else "lax",
+    "https_only": ENVIRONMENT == "production",
+    "path": "/"
+}
+
+if ENVIRONMENT == "production" and backend_domain:
+    session_middleware_config["domain"] = backend_domain
+    logger.info(f"Using domain {backend_domain} for session cookies in production")
+
+app.add_middleware(SessionMiddleware, **session_middleware_config)
+
+# Add middleware to log session info
+@app.middleware("http")
+async def log_session_info(request: Request, call_next):
+    logger.info(f"Request path: {request.url.path}")
+    logger.info(f"Request cookies: {request.cookies}")
+    logger.info(f"Session data: {request.session}")
+    response = await call_next(request)
+    if "set-cookie" in response.headers:
+        logger.info(f"Setting cookies: {response.headers['set-cookie']}")
+        # Ensure cookie attributes are set correctly
+        cookie = response.headers["set-cookie"]
+        if ENVIRONMENT == "production":
+            if "SameSite=None" not in cookie:
+                cookie = cookie.replace("SameSite=Lax", "SameSite=None")
+            if "Secure" not in cookie:
+                cookie += "; Secure"
+            if backend_domain and f"Domain={backend_domain}" not in cookie:
+                cookie += f"; Domain={backend_domain}"
+            response.headers["set-cookie"] = cookie
+    return response
 
 # Configure OAuth
 oauth = OAuth()
