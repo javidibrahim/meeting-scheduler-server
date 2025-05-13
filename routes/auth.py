@@ -89,14 +89,14 @@ def init_auth_routes(oauth_client):
                     "picture": userinfo.get("picture")
                 }
 
-                # Fix: Use urljoin to ensure proper URL construction
-                dashboard_url = urljoin(FRONTEND_URL, "/dashboard")
-                logger.info(f"Redirecting to dashboard: {dashboard_url}")
-                return RedirectResponse(url=dashboard_url, status_code=302)
+                # Fix: Use the frontend URL directly for the dashboard redirect
+                logger.info(f"Redirecting to dashboard at: {FRONTEND_URL}/dashboard")
+                return RedirectResponse(url=f"{FRONTEND_URL}/dashboard", status_code=302)
 
         except Exception as e:
             logger.error(f"Google callback error: {str(e)}")
-            error_url = urljoin(FRONTEND_URL, f"/?error=auth_failed&message={quote(str(e))}")
+            # Fix: Use the frontend URL directly for error redirects
+            error_url = f"{FRONTEND_URL}/?error=auth_failed&message={quote(str(e))}"
             logger.info(f"Redirecting to error page: {error_url}")
             return RedirectResponse(url=error_url, status_code=302)
 
