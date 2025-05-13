@@ -14,8 +14,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://meeting-scheduler-client-delta.vercel.app").rstrip('/')
-BACKEND_URL = os.getenv("BACKEND_URL", "https://meeting-scheduler-server.fly.dev").rstrip('/')
+
+# Get environment variables with defaults for local development
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+BACKEND_URL = os.getenv("BACKEND_URL")
+
+logger.info(f"Auth routes initialized with:")
+logger.info(f"Frontend URL: {FRONTEND_URL}")
+logger.info(f"Backend URL: {BACKEND_URL}")
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
@@ -89,16 +95,17 @@ def init_auth_routes(oauth_client):
                     "picture": userinfo.get("picture")
                 }
 
-                # Fix: Use the frontend URL directly for the dashboard redirect
-                logger.info(f"Redirecting to dashboard at: {FRONTEND_URL}/dashboard")
-                return RedirectResponse(url=f"{FRONTEND_URL}/dashboard", status_code=302)
+                # Construct redirect URLs based on environment
+                dashboard_url = urljoin(FRONTEND_URL, "/dashboard")
+                error_url = urljoin(FRONTEND_URL, "/?error=auth_failed")
+                
+                logger.info(f"Redirecting to dashboard URL: {dashboard_url}")
+                return RedirectResponse(url=dashboard_url)
 
         except Exception as e:
-            logger.error(f"Google callback error: {str(e)}")
-            # Fix: Use the frontend URL directly for error redirects
-            error_url = f"{FRONTEND_URL}/?error=auth_failed&message={quote(str(e))}"
-            logger.info(f"Redirecting to error page: {error_url}")
-            return RedirectResponse(url=error_url, status_code=302)
+            logger.error(f"Error in Google callback: {str(e)}")
+            error_url = urljoin(FRONTEND_URL, "/?error=auth_failed")
+            return RedirectResponse(url=error_url)
 
     @router.get("/hubspot")
     async def hubspot_auth(request: Request):

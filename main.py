@@ -14,27 +14,6 @@ from db.mongo import init_db, get_db, client
 import logging
 import traceback
 
-# Configure detailed logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
-
-# Log system information for debugging
-logger.info(f"Python version: {sys.version}")
-logger.info(f"Platform: {platform.platform()}")
-logger.info(f"Environment: {os.getenv('ENVIRONMENT', 'development')}")
-logger.info(f"MongoDB URI set: {bool(os.getenv('MONGO_URI'))}")
-logger.info(f"Frontend URL: {os.getenv('FRONTEND_URL', 'Not set')}")
-logger.info(f"PORT: {os.getenv('PORT', '8000')}")
-
-# Track database connection status
-db_connected = False
 
 app = FastAPI(
     title="Meeting Scheduler API",
@@ -42,31 +21,55 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Log middleware setup
-logger.info("Setting up middleware")
+# Load environment variables based on ENVIRONMENT
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+env_file = f".env.{ENVIRONMENT}"
+load_dotenv(env_file)
 
+# Configure detailed logging
+logging.basicConfig(
+    level=logging.DEBUG if ENVIRONMENT == "development" else logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
+# Log system information for debugging
+logger.info(f"Loading environment from: {env_file}")
+logger.info(f"Environment: {ENVIRONMENT}")
+logger.info(f"Python version: {sys.version}")
+logger.info(f"Platform: {platform.platform()}")
+
+# Get environment variables
 FRONTEND_URL = os.getenv("FRONTEND_URL")
-BACKEND_URL = os.getenv("BACKEND_URL", "https://meeting-scheduler-server.fly.dev")
+BACKEND_URL = os.getenv("BACKEND_URL")
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+# Validate required environment variables
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY environment variable is required")
+if not FRONTEND_URL:
+    raise ValueError("FRONTEND_URL environment variable is required")
+if not BACKEND_URL:
+    raise ValueError("BACKEND_URL environment variable is required")
+
+logger.info(f"Frontend URL: {FRONTEND_URL}")
+logger.info(f"Backend URL: {BACKEND_URL}")
+logger.info(f"MongoDB URI set: {bool(os.getenv('MONGO_URI'))}")
 
 # Configure session middleware with proper domain settings
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SESSION_SECRET", "your-secret-key-here"),
+    secret_key=SECRET_KEY,
     session_cookie="session",
     max_age=14 * 24 * 60 * 60,  # 14 days
-    same_site="lax",  # Changed from "none" to "lax" for better security
-    https_only=True,
-    path="/",
-    domain=None  # Let the browser handle the domain
+    same_site="none" if ENVIRONMENT == "production" else "lax",
+    https_only=ENVIRONMENT == "production",
+    path="/"
 )
-logger.info("Session middleware configured")
 
 # Configure CORS with proper settings for cross-domain requests
-origins = [
-    FRONTEND_URL,
-    "https://meeting-scheduler-client-delta.vercel.app",
-]
-logger.info(f"Configuring CORS with origins: {origins}")
+origins = [FRONTEND_URL]
 
 app.add_middleware(
     CORSMiddleware,
@@ -77,17 +80,14 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600
 )
-logger.info("CORS middleware configured")
 
 # Configure OAuth
-logger.info("Setting up OAuth")
 oauth = OAuth()
 
 google_client_id = os.getenv("GOOGLE_CLIENT_ID")
 google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
 
 if google_client_id and google_client_secret:
-    logger.info("Registering Google OAuth")
     oauth.register(
         name='google',
         client_id=google_client_id,
@@ -98,7 +98,6 @@ if google_client_id and google_client_secret:
             'token_endpoint_auth_method': 'client_secret_post'
         }
     )
-    logger.info("Google OAuth registered successfully")
 else:
     logger.warning("Google OAuth credentials not found - OAuth functionality will be limited")
 
