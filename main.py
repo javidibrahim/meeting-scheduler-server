@@ -65,7 +65,8 @@ app.add_middleware(
     max_age=14 * 24 * 60 * 60,  # 14 days
     same_site="none" if ENVIRONMENT == "production" else "lax",
     https_only=ENVIRONMENT == "production",
-    path="/"
+    path="/",
+    domain=".fly.dev" if ENVIRONMENT == "production" else None  # Set domain for production
 )
 
 # Configure CORS with proper settings for cross-domain requests
