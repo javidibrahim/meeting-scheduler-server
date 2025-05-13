@@ -48,6 +48,8 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 
 # Extract domain from BACKEND_URL for cookie settings
 backend_domain = urlparse(BACKEND_URL).netloc if BACKEND_URL else None
+if backend_domain and backend_domain.startswith('.'):
+    backend_domain = backend_domain[1:]  # Remove leading dot if present
 logger.info(f"Backend domain for cookies: {backend_domain}")
 
 # Validate required environment variables
@@ -124,9 +126,12 @@ async def log_session_info(request: Request, call_next):
                 cookie = cookie.replace("SameSite=Lax", "SameSite=None")
             if "Secure" not in cookie:
                 cookie += "; Secure"
-            if backend_domain and f"Domain={backend_domain}" not in cookie:
+            if backend_domain:
+                # Remove any existing domain attribute
+                cookie = '; '.join([part for part in cookie.split('; ') if not part.startswith('Domain=')])
                 cookie += f"; Domain={backend_domain}"
             response.headers["set-cookie"] = cookie
+            logger.info(f"Modified cookie header: {cookie}")
     return response
 
 # Configure OAuth

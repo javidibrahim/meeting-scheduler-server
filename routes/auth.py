@@ -56,7 +56,9 @@ def init_auth_routes(oauth_client):
         try:
             logger.info("Google callback received")
             logger.info(f"Request cookies: {request.cookies}")
+            logger.info(f"Request headers: {dict(request.headers)}")
             logger.info(f"Session data before: {request.session}")
+            logger.info(f"Session ID: {request.session.get('id', 'no session id')}")
             
             # Verify state parameter
             state = request.session.pop('oauth_state', None)
@@ -106,12 +108,13 @@ def init_auth_routes(oauth_client):
                 }
                 request.session.update(session_data)
                 logger.info(f"Session data after update: {request.session}")
+                logger.info(f"Session ID after update: {request.session.get('id', 'no session id')}")
                 
                 # Create response with explicit cookie settings
                 response = RedirectResponse(url=urljoin(FRONTEND_URL, "/dashboard"))
                 
-                # Log the response headers
-                logger.info("Response headers before setting cookie:")
+                # Log all response headers
+                logger.info("Response headers:")
                 for key, value in response.headers.items():
                     logger.info(f"{key}: {value}")
                 
@@ -130,6 +133,9 @@ def init_auth_routes(oauth_client):
                     
                     response.headers["set-cookie"] = cookie
                     logger.info(f"Modified cookie: {cookie}")
+                    logger.info(f"Final cookie header: {response.headers['set-cookie']}")
+                else:
+                    logger.error("No set-cookie header in response!")
                 
                 logger.info("Redirecting to dashboard")
                 return response
