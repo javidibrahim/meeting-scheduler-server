@@ -48,23 +48,24 @@ logger.info("Setting up middleware")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SECRET_KEY", "your-secret-key-here"),
-    session_cookie="google_oauth_session",
-    max_age=14 * 24 * 60 * 60,
-    same_site="lax",
-    https_only=os.getenv("ENVIRONMENT", "development") == "production",   
-    path="/"   
+    secret_key=os.getenv("SESSION_SECRET", "your-secret-key-here"),
+    session_cookie="session",  # More generic cookie name
+    max_age=14 * 24 * 60 * 60,  # 14 days
+    same_site="none",  # Allow cross-site cookies
+    https_only=True,  # Always use HTTPS for cookies
+    path="/",
+    domain=None  # Let the browser handle the domain
 )
 logger.info("Session middleware configured")
 
-# Configure CORS
+# Configure CORS with more permissive settings for development
 origins = [FRONTEND_URL] if FRONTEND_URL else ["*"]
 logger.info(f"Configuring CORS with origins: {origins}")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=True,  # Important for cookies
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"],

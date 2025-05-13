@@ -6,7 +6,7 @@ import logging
 from services.user_db import UserService
 from google_auth_oauthlib.flow import Flow
 from datetime import datetime
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 import secrets
 
 # Set up logging
@@ -14,8 +14,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://meeting-scheduler-client-delta.vercel.app")
-BACKEND_URL = os.getenv("BACKEND_URL", "https://meeting-scheduler-server.onrender.com")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://meeting-scheduler-client-delta.vercel.app").rstrip('/')
+BACKEND_URL = os.getenv("BACKEND_URL", "https://meeting-scheduler-server.fly.dev").rstrip('/')
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
@@ -52,13 +52,13 @@ def init_auth_routes(oauth_client):
             state = request.session.pop('oauth_state', None)
             if not state:
                 logger.error("No state parameter found in session")
-                return RedirectResponse(url=f'{FRONTEND_URL}/?error=auth_failed&message=Invalid state parameter')
+                return RedirectResponse(url=urljoin(FRONTEND_URL, "/?error=auth_failed&message=Invalid state parameter"))
             
             # Get the state from the callback
             callback_state = request.query_params.get('state')
             if not callback_state or callback_state != state:
                 logger.error(f"State mismatch: session={state}, callback={callback_state}")
-                return RedirectResponse(url=f'{FRONTEND_URL}/?error=auth_failed&message=State parameter mismatch')
+                return RedirectResponse(url=urljoin(FRONTEND_URL, "/?error=auth_failed&message=State parameter mismatch"))
             
             token = await oauth_client.google.authorize_access_token(request)
             async with httpx.AsyncClient() as client:
@@ -89,11 +89,16 @@ def init_auth_routes(oauth_client):
                     "picture": userinfo.get("picture")
                 }
 
-                return RedirectResponse(url=f'{FRONTEND_URL}/dashboard')
+                # Fix: Use urljoin to ensure proper URL construction
+                dashboard_url = urljoin(FRONTEND_URL, "/dashboard")
+                logger.info(f"Redirecting to dashboard: {dashboard_url}")
+                return RedirectResponse(url=dashboard_url, status_code=302)
 
         except Exception as e:
             logger.error(f"Google callback error: {str(e)}")
-            return RedirectResponse(url=f'{FRONTEND_URL}/?error=auth_failed&message={str(e)}')
+            error_url = urljoin(FRONTEND_URL, f"/?error=auth_failed&message={quote(str(e))}")
+            logger.info(f"Redirecting to error page: {error_url}")
+            return RedirectResponse(url=error_url, status_code=302)
 
     @router.get("/hubspot")
     async def hubspot_auth(request: Request):
