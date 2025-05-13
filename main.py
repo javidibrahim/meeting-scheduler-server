@@ -13,6 +13,7 @@ from routes import init_routes
 from db.mongo import init_db, get_db, client
 import logging
 import traceback
+from urllib.parse import urlparse
 
 
 app = FastAPI(
@@ -45,6 +46,10 @@ FRONTEND_URL = os.getenv("FRONTEND_URL")
 BACKEND_URL = os.getenv("BACKEND_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
+# Extract domain from BACKEND_URL for cookie settings
+backend_domain = urlparse(BACKEND_URL).netloc if BACKEND_URL else None
+logger.info(f"Backend domain for cookies: {backend_domain}")
+
 # Validate required environment variables
 if not SECRET_KEY:
     raise ValueError("SECRET_KEY environment variable is required")
@@ -66,7 +71,7 @@ app.add_middleware(
     same_site="none" if ENVIRONMENT == "production" else "lax",
     https_only=ENVIRONMENT == "production",
     path="/",
-    domain=".fly.dev" if ENVIRONMENT == "production" else None  # Set domain for production
+    domain=backend_domain if ENVIRONMENT == "production" else None  # Use exact backend domain
 )
 
 # Configure CORS with proper settings for cross-domain requests
