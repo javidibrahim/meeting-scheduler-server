@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Body, Request
+from fastapi import APIRouter, HTTPException, Body, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.requests import Request as StarletteRequest
@@ -11,7 +11,7 @@ import logging
 import json
 from typing import List, Dict, Any
 from services.email_service import send_meeting_notification
-
+from services.linkedin_scraper_service import create_linkedin_summary
 # Set up logging with more detailed format
 logging.basicConfig(
     level=logging.INFO,
@@ -64,8 +64,19 @@ def init_public_routes():
             
             # Check if link has expired
             if link.get("expirationDate"):
-                expiration_date = datetime.fromisoformat(link["expirationDate"]) if isinstance(link["expirationDate"], str) else link["expirationDate"]
-                if expiration_date.date() < datetime.now().date():
+                expiration_date_str = str(link["expirationDate"])
+                if 'Z' in expiration_date_str:
+                    expiration_date = datetime.fromisoformat(expiration_date_str.replace('Z', '+00:00'))
+                elif '+' in expiration_date_str or '-' in expiration_date_str and 'T' in expiration_date_str:
+                    expiration_date = datetime.fromisoformat(expiration_date_str)
+                else:
+                    expiration_date = datetime.fromisoformat(expiration_date_str)
+                
+                # Convert to naive datetime for comparison
+                if expiration_date.tzinfo is not None:
+                    expiration_date = expiration_date.replace(tzinfo=None)
+                
+                if expiration_date.date() < datetime.utcnow().date():
                     logger.warning(f"[PUBLIC] Link {slug} has expired on {expiration_date.date()}")
                     raise HTTPException(status_code=400, detail="This link has expired")
             
@@ -133,25 +144,6 @@ def init_public_routes():
                 except Exception as e:
                     logger.error(f"[PUBLIC] Error fetching events for calendar {calendar_id}: {str(e)}")
             
-            # Get scheduled events
-            logger.info(f"[PUBLIC] Fetching scheduled events for user: {user_email}")
-            try:
-                scheduled_events = await db["scheduled_events"].find(
-                    {
-                        "user_id": user_email,
-                        "scheduled_for": {
-                            "$gte": now.isoformat().split('T')[0],
-                            "$lte": max_date.isoformat().split('T')[0] + 'T23:59:59'
-                        }
-                    }
-                ).to_list(length=None)
-                
-                logger.info(f"[PUBLIC] Found {len(scheduled_events)} scheduled events")
-                events.extend(scheduled_events)
-                
-            except Exception as e:
-                logger.error(f"[PUBLIC] Error fetching scheduled events: {str(e)}")
-            
             # Prepare response
             response_data = {
                 "link": link,
@@ -169,66 +161,78 @@ def init_public_routes():
         except Exception as e:
             logger.error(f"[PUBLIC] Error fetching public schedule link for {slug}: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @router.post("/schedule/book")
-    async def book_meeting(booking: ScheduledEvent):
+    async def book_meeting(booking: ScheduledEvent, background_tasks: BackgroundTasks):
         """Book a meeting through a public scheduling link without authentication"""
-        logger.info(f"[PUBLIC] POST /schedule/book - Received booking request for email: {booking.email}")
         try:
-            logger.info(f"[PUBLIC] Attempting to book meeting with link ID: {booking.scheduling_link_id}")
-            # Find the link by ID
+            logger.info(f"[Booking] Starting booking process for email: {booking.email}")
+            
+            # Find the scheduling link
+            logger.info(f"[Booking] Looking up schedule link ID: {booking.scheduling_link_id}")
             link = await db["schedule_links"].find_one({"_id": ObjectId(booking.scheduling_link_id)})
-            
             if not link:
+                logger.error(f"[Booking] Schedule link not found: {booking.scheduling_link_id}")
                 raise HTTPException(status_code=404, detail="Schedule link not found")
-                
-            logger.info(f"Found link: {link.get('slug')} with fields: maxDaysInAdvance={link.get('maxDaysInAdvance')}, meetingLength={link.get('meetingLength')}")
             
-            # Check if link has expired
+            # get advisor email
+            user_email = link.get("userId")
+            logger.info(f"[Booking] Advisor email: {user_email}")
+            
+            # Validate link expire time
             if link.get("expirationDate"):
-                expiration_date = datetime.fromisoformat(link["expirationDate"]) if isinstance(link["expirationDate"], str) else link["expirationDate"]
-                if expiration_date.date() < datetime.now().date():
+                logger.info(f"[Booking] Validating expiration date: {link.get('expirationDate')}")
+                expiration_date = datetime.fromisoformat(str(link["expirationDate"]))
+                # Convert to naive datetime for comparison if it's timezone-aware
+                if expiration_date.tzinfo is not None:
+                    expiration_date = expiration_date.replace(tzinfo=None)
+                
+                now = datetime.utcnow()  # Use naive UTC time
+                if expiration_date.date() < now.date():
+                    logger.warning(f"[Booking] Link expired on {expiration_date.date()}")
                     raise HTTPException(status_code=400, detail="This link has expired")
             
-            # Check if link has reached maximum uses
-            if link.get("maxUses") and link.get("uses", 0) >= link["maxUses"]:
-                raise HTTPException(status_code=400, detail="This link has reached its maximum number of uses")
-                
-            # Check if booking date is within maxDaysInAdvance
-            max_days_in_advance = link.get("maxDaysInAdvance", 14)
+            # validate max uses
+            current_uses = link.get("uses", 0)
+            max_uses = link.get("maxUses")
+            if max_uses:
+                logger.info(f"[Booking] Checking usage limit: {current_uses}/{max_uses}")
+                if current_uses >= max_uses:
+                    logger.warning(f"[Booking] Link reached max uses: {current_uses}/{max_uses}")
+                    raise HTTPException(status_code=400, detail="This link has reached its maximum number of uses")
             
-            # Parse received date - without timezone info it's assumed to be in local time
-            logger.info(f"Received booking request for time: {booking.scheduled_for}")
+            # Parse dates and validate booking time
+            logger.info(f"[Booking] Validating scheduled date: {booking.scheduled_for}")
             scheduled_date = datetime.fromisoformat(booking.scheduled_for)
-            logger.info(f"Parsed scheduled date as: {scheduled_date}")
+            # Convert to naive datetime for comparison if it's timezone-aware
+            if scheduled_date.tzinfo is not None:
+                scheduled_date = scheduled_date.replace(tzinfo=None)
             
-            # Create timezone-aware now and max_date for proper comparison
-            now = datetime.utcnow()
-            max_date = now + timedelta(days=max_days_in_advance)
+            max_days = link.get("maxDaysInAdvance", 14)
+            max_future_date = datetime.utcnow() + timedelta(days=max_days)
             
-            if scheduled_date > max_date:
-                raise HTTPException(status_code=400, detail=f"Cannot book more than {max_days_in_advance} days in advance")
-                
-            # Check for duplicate bookings at the same time
+            if scheduled_date > max_future_date:
+                logger.warning(f"[Booking] Date too far in future: {scheduled_date} > {max_future_date}")
+                raise HTTPException(status_code=400, detail=f"Cannot book more than {max_days} days in advance")
+            
+            # Check for double booking
+            logger.info(f"[Booking] Checking for double booking at {booking.scheduled_for}")
             existing_booking = await db["scheduled_events"].find_one({
-                "user_id": link.get("userId"),
+                "user_id": user_email,
                 "scheduled_for": booking.scheduled_for
             })
-            
             if existing_booking:
-                logger.warning(f"Duplicate booking attempt at {booking.scheduled_for}")
-                raise HTTPException(status_code=400, detail="This time slot is no longer available. Please select another time.")
-                
-            # Verify meeting duration matches the link's meetingLength
-            if booking.duration_minutes != link.get("meetingLength"):
-                logger.warning(f"Duration mismatch: requested {booking.duration_minutes} min but link specifies {link.get('meetingLength')} min")
-                # Use the correct duration from the link
-                booking.duration_minutes = link.get("meetingLength")
+                logger.warning(f"[Booking] Time slot already booked: {booking.scheduled_for}")
+                raise HTTPException(status_code=400, detail="This time slot is no longer available")
             
-            # Create a scheduled event
-            scheduled_event = {
+            # Use correct duration from link
+            booking.duration_minutes = link.get("meetingLength", booking.duration_minutes)
+            logger.info(f"[Booking] Using duration: {booking.duration_minutes} minutes")
+            
+            # Create and save the scheduled event
+            event = {
                 "scheduling_link_id": booking.scheduling_link_id,
-                "user_id": link.get("userId"),  # advisor email
+                "user_id": user_email,
                 "scheduled_for": booking.scheduled_for,
                 "duration_minutes": booking.duration_minutes,
                 "email": booking.email,
@@ -237,53 +241,104 @@ def init_public_routes():
                 "created_at": datetime.utcnow()
             }
             
-            logger.info(f"Creating scheduled event: {json.dumps(scheduled_event, default=str)}")
+            logger.info("[Booking] Inserting scheduled event")
+            result = await db["scheduled_events"].insert_one(event)
             
-            # Insert the scheduled event
-            result = await db["scheduled_events"].insert_one(scheduled_event)
-            scheduled_event_id = result.inserted_id
-            
-            # Increment the use counter for the link
+            # Update link usage counter
+            logger.info("[Booking] Updating link usage counter")
             await db["schedule_links"].update_one(
                 {"_id": ObjectId(booking.scheduling_link_id)},
                 {"$inc": {"uses": 1}}
             )
+
+            # Get insert id 
+            event_id = result.inserted_id
+            logger.info(f"[Booking] Event created with ID: {event_id}")
             
-            logger.info(f"Meeting scheduled successfully for {booking.email} with advisor {link.get('userId')}")
+            # Use non-deprecated way to get UTC time
+            event_created_at = datetime.utcnow()
             
-            # Send email notification to the advisor
-            try:
-                logger.info(f"Initiating email notification to advisor: {link.get('userId')}")
-                email_sent = await send_meeting_notification(
-                    advisor_email=link.get("userId"),
-                    client_email=booking.email,
-                    scheduled_date=scheduled_date,
-                    duration=booking.duration_minutes,
-                    answers=booking.answers,
-                    client_linkedin=booking.linkedin,
-                    scheduling_link_id=booking.scheduling_link_id
+            # Ensure internal calendar exists for the advisor
+            logger.info(f"[Booking] Ensuring internal calendar exists for advisor: {user_email}")
+            internal_calendar = {
+                "id": "internal",
+                "user_email": user_email,
+                "access_role": "owner",
+                "access_token": "internal",
+                "created_at": datetime.utcnow(),
+                "email": user_email,
+                "events_count": 0,
+                "is_read_only": False,
+                "name": "Internal Calendar",
+                "refresh_token": None,
+                "updated_at": datetime.utcnow()
+            }
+            await db["calendars"].update_one(
+                {"id": "internal", "user_email": user_email},
+                {"$set": internal_calendar},
+                upsert=True
+            )
+            logger.info(f"[Booking] Internal calendar ensured for advisor: {user_email}")
+            
+            # insert to events for advisor
+            calendar_event = {
+                "calendar_id": "internal",
+                "id": str(event_id),  # Convert ObjectId to string
+                "created_at": event_created_at,
+                "description": None,
+                "end_time": datetime.fromisoformat(booking.scheduled_for) + timedelta(minutes=booking.duration_minutes),
+                "location": None,
+                "start_time": datetime.fromisoformat(booking.scheduled_for),
+                "status": "confirmed",
+                "summary": "Meeting with client " + booking.email,
+                "updated_at": event_created_at
+            }
+
+            logger.info("[Booking] Creating calendar event")
+            calendar_event_result = await db["events"].insert_one(calendar_event)
+            
+            if not calendar_event_result.inserted_id:
+                logger.error("[Booking] Failed to insert calendar event")
+                raise HTTPException(status_code=500, detail="Failed to insert calendar event")
+            
+            logger.info(f"[Booking] calendar event created with id: {calendar_event_result.inserted_id}")
+        
+            # Add email notification to background tasks instead of awaiting it
+            logger.info("[Booking] Scheduling email notification")
+            background_tasks.add_task(
+                send_meeting_notification,
+                advisor_email=user_email,
+                client_email=booking.email,
+                scheduled_date=scheduled_date,
+                duration=booking.duration_minutes,
+                answers=booking.answers,
+                client_linkedin=booking.linkedin,
+                scheduling_link_id=booking.scheduling_link_id
+            )
+            
+            # run background task to get reponse summary and insights text
+            if booking.linkedin:
+                logger.info(f"[Booking] Scheduling LinkedIn analysis for profile: {booking.linkedin}")
+                background_tasks.add_task(
+                    create_linkedin_summary,
+                    event_id=str(result.inserted_id),
+                    profile_url=booking.linkedin,
+                    questions=booking.answers,
+                    answers=booking.answers
                 )
-                if email_sent:
-                    logger.info("Email notification successfully completed")
-                else:
-                    logger.warning("Email notification process completed but email was not sent")
-            except Exception as e:
-                logger.warning(f"Failed to send notification email: {str(e)}")
-                # Continue with the response even if email fails
             
-            response_data = {
+            logger.info("[Booking] Successfully completed booking process")
+            return {
                 "success": True,
                 "message": "Meeting scheduled successfully",
                 "scheduled_event_id": str(result.inserted_id)
             }
             
-            return response_data
-            
         except HTTPException as he:
-            # Re-raise HTTP exceptions directly
+            logger.error(f"[Booking] HTTP Exception: {str(he.detail)}")
             raise
         except Exception as e:
-            logger.error(f"Error booking meeting: {str(e)}")
+            logger.error(f"[Booking] Unexpected error: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
     
     # Add a catch-all route to handle direct URL access

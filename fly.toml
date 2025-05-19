@@ -16,6 +16,11 @@ primary_region = 'iad'
   min_machines_running = 0
   processes = ['app']
 
+[env]
+  ENVIRONMENT = "production"
+  FRONTEND_URL = "https://meeting-scheduler-client.fly.dev"
+  BACKEND_URL = "https://meeting-scheduler-server.fly.dev"
+
 [[vm]]
   memory = '1gb'
   cpu_kind = 'shared'

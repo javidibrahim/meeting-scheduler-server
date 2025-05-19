@@ -1,6 +1,5 @@
 from datetime import datetime
 from typing import Optional, Dict, Any
-from motor.motor_asyncio import AsyncIOMotorDatabase
 from db.mongo import db
 import logging
 

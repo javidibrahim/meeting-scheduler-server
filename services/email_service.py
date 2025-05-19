@@ -100,7 +100,7 @@ class EmailService:
             <ul>
             """
             for answer in answers:
-                html += f'<li><strong>{answer.get("question", "")}:</strong> {answer.get("answer", "")}</li>'
+                html += f'<li><strong>{answer.question}:</strong> {answer.answer}</li>'
             html += "</ul>"
         
         html += """

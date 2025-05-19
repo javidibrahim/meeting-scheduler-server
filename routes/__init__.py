@@ -36,5 +36,6 @@ def init_routes(app: FastAPI, oauth_client):
     # Initialize public routes (no authentication required)
     public_router = init_public_routes()
     app.include_router(public_router)
+
     
     return app

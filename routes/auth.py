@@ -4,25 +4,17 @@ import httpx
 import os
 import logging
 from services.user_db import UserService
-from google_auth_oauthlib.flow import Flow
+from urllib.parse import urljoin
 from datetime import datetime
-from urllib.parse import quote, urljoin
 import secrets
 
-# Set up logging
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-# Get environment variables with defaults for local development
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 BACKEND_URL = os.getenv("BACKEND_URL")
-
-logger.info(f"Auth routes initialized with:")
-logger.info(f"Frontend URL: {FRONTEND_URL}")
-logger.info(f"Backend URL: {BACKEND_URL}")
-
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 HUBSPOT_CLIENT_ID = os.getenv("HUBSPOT_CLIENT_ID")
@@ -36,10 +28,9 @@ def init_auth_routes(oauth_client):
     async def google_auth(request: Request):
         try:
             redirect_uri = f"{BACKEND_URL}/auth/google/callback"
-            # Generate a random state parameter
-            state = secrets.token_urlsafe(32)
+            state = secrets.token_urlsafe(16)
             request.session['oauth_state'] = state
-            
+
             return await oauth_client.google.authorize_redirect(
                 request,
                 redirect_uri,
@@ -49,41 +40,22 @@ def init_auth_routes(oauth_client):
             )
         except Exception as e:
             logger.error(f"Google auth error: {str(e)}")
-            return RedirectResponse(url=f'{FRONTEND_URL}/?error=auth_failed&message={str(e)}')
+            return RedirectResponse(url=f'{FRONTEND_URL}/?error=auth_failed')
 
     @router.get("/google/callback")
     async def google_callback(request: Request):
         try:
-            logger.info("Google callback received")
-            logger.info(f"Request cookies: {request.cookies}")
-            logger.info(f"Request headers: {dict(request.headers)}")
-            logger.info(f"Session data before: {request.session}")
-            logger.info(f"Session ID: {request.session.get('id', 'no session id')}")
-            
-            # Verify state parameter
-            state = request.session.pop('oauth_state', None)
-            if not state:
-                logger.error("No state parameter found in session")
-                return RedirectResponse(url=urljoin(FRONTEND_URL, "/?error=auth_failed&message=Invalid state parameter"))
-            
-            # Get the state from the callback
-            callback_state = request.query_params.get('state')
-            if not callback_state or callback_state != state:
-                logger.error(f"State mismatch: session={state}, callback={callback_state}")
-                return RedirectResponse(url=urljoin(FRONTEND_URL, "/?error=auth_failed&message=State parameter mismatch"))
-            
             token = await oauth_client.google.authorize_access_token(request)
-            logger.info("Successfully obtained access token")
-            
+
             async with httpx.AsyncClient() as client:
                 userinfo_response = await client.get(
                     "https://www.googleapis.com/oauth2/v2/userinfo",
                     headers={"Authorization": f"Bearer {token['access_token']}"}
                 )
                 if not userinfo_response.is_success:
-                    raise Exception(f"Failed to get user info: {userinfo_response.text}")
+                    raise Exception("Failed to get user info")
+
                 userinfo = userinfo_response.json()
-                logger.info(f"Retrieved user info for: {userinfo['email']}")
 
                 user = await user_service.create_or_update_google_user(
                     email=userinfo["email"],
@@ -95,57 +67,39 @@ def init_auth_routes(oauth_client):
                     }
                 )
 
-                if not user:
-                    raise Exception("Failed to create/update user")
-
-                # Set session data
-                session_data = {
-                    "user": {
-                        "email": user["email"],
-                        "name": userinfo.get("name"),
-                        "picture": userinfo.get("picture")
-                    }
+                request.session["user"] = {
+                    "email": user["email"],
+                    "name": userinfo.get("name"),
+                    "picture": userinfo.get("picture")
                 }
-                request.session.update(session_data)
-                logger.info(f"Session data after update: {request.session}")
-                logger.info(f"Session ID after update: {request.session.get('id', 'no session id')}")
-                
-                # Create response with explicit cookie settings
-                response = RedirectResponse(url=urljoin(FRONTEND_URL, "/dashboard"))
-                
-                # Log all response headers
-                logger.info("Response headers:")
-                for key, value in response.headers.items():
-                    logger.info(f"{key}: {value}")
-                
-                # Ensure cookie is set with correct attributes
-                if "set-cookie" in response.headers:
-                    cookie = response.headers["set-cookie"]
-                    logger.info(f"Original cookie: {cookie}")
-                    
-                    # Add required attributes for cross-domain cookies
-                    if "SameSite=None" not in cookie:
-                        cookie = cookie.replace("SameSite=Lax", "SameSite=None")
-                    if "Secure" not in cookie:
-                        cookie += "; Secure"
-                    if backend_domain and f"Domain={backend_domain}" not in cookie:
-                        cookie += f"; Domain={backend_domain}"
-                    
-                    response.headers["set-cookie"] = cookie
-                    logger.info(f"Modified cookie: {cookie}")
-                    logger.info(f"Final cookie header: {response.headers['set-cookie']}")
-                else:
-                    logger.error("No set-cookie header in response!")
-                
-                logger.info("Redirecting to dashboard")
-                return response
 
+                return RedirectResponse(url=f"{FRONTEND_URL}/dashboard")
         except Exception as e:
-            logger.error(f"Error in Google callback: {str(e)}")
-            logger.error(f"Full exception details: {repr(e)}")
-            error_url = urljoin(FRONTEND_URL, "/?error=auth_failed")
-            return RedirectResponse(url=error_url)
+            logger.error(f"Callback error: {str(e)}")
+            return RedirectResponse(url=f'{FRONTEND_URL}/?error=auth_failed')
 
+    @router.get("/me")
+    async def get_current_user(request: Request):
+        user = request.session.get("user")
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+
+        user_data = await user_service.get_user_by_email(user['email'])
+        if not user_data:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return {
+            **user_data,
+            "name": user.get('name'),
+            "picture": user.get('picture')
+        }
+
+    @router.post("/logout")
+    async def logout(request: Request):
+        request.session.pop("user", None)
+        return {"message": "Logged out successfully"}
+
+    # Optional: Keep HubSpot if you're using it
     @router.get("/hubspot")
     async def hubspot_auth(request: Request):
         user = request.session.get("user")
@@ -208,101 +162,11 @@ def init_auth_routes(oauth_client):
         return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?success=hubspot_connected")
 
     @router.get("/hubspot/connection")
-    async def get_hubspot_connection(request: Request):
-        """Get HubSpot connection status for the current user"""
-        try:
-            user = request.session.get("user")
-            if not user:
-                logger.warning("No user in session for HubSpot connection check")
-                raise HTTPException(status_code=401, detail="Not authenticated")
+    async def hubspot_connection(request: Request):
+        user = request.session.get("user")
+        if not user:
+            return RedirectResponse(url=f"{FRONTEND_URL}/dashboard?error=not_authenticated")
 
-            logger.info(f"Checking HubSpot connection status for user {user['email']}")
-            user_data = await user_service.get_user_tokens(user["email"])
-            
-            if not user_data:
-                logger.info(f"No user data found for {user['email']}")
-                return {"connected": False}
-            
-            if not user_data.get("hubspot"):
-                logger.info(f"No HubSpot data found for {user['email']}")
-                return {"connected": False}
-
-            # Check if token is expired
-            hubspot_data = user_data["hubspot"]
-            expires_at = hubspot_data.get("expires_at", 0)
-            current_time = datetime.utcnow().timestamp()
-            
-            logger.info(f"HubSpot token expires at {expires_at}, current time {current_time}")
-            
-            if expires_at < current_time:
-                logger.info(f"HubSpot token expired for {user['email']}, removing connection")
-                # Token is expired, remove it
-                await user_service.update_hubspot_tokens(user["email"], {})
-                return {"connected": False}
-
-            logger.info(f"HubSpot connection active for {user['email']} with portal {hubspot_data.get('portal_name')}")
-            return {
-                "connected": True,
-                "portal_name": hubspot_data.get("portal_name", "Unknown Portal")
-            }
-
-        except Exception as e:
-            logger.error(f"Error getting HubSpot connection status: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @router.delete("/hubspot/connection")
-    async def disconnect_hubspot(request: Request):
-        """Disconnect HubSpot for the current user"""
-        try:
-            user = request.session.get("user")
-            if not user:
-                logger.warning("No user in session for HubSpot disconnect")
-                raise HTTPException(status_code=401, detail="Not authenticated")
-
-            logger.info(f"Disconnecting HubSpot for user {user['email']}")
-            
-            # Update user document to remove HubSpot data
-            updated_user = await user_service.update_hubspot_tokens(user["email"], {})
-            
-            if not updated_user:
-                logger.warning(f"No user found to disconnect HubSpot for {user['email']}")
-                raise HTTPException(status_code=404, detail="User not found")
-            
-            logger.info(f"Successfully disconnected HubSpot for {user['email']}")
-            return {"message": "Successfully disconnected from HubSpot"}
-
-        except Exception as e:
-            logger.error(f"Error disconnecting HubSpot: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @router.get("/me")
-    async def get_current_user(request: Request):
-        try:
-            user = request.session.get("user")
-            if not user:
-                raise HTTPException(status_code=401, detail="Not authenticated")
-
-            user_data = await user_service.get_user_by_email(user['email'])
-            if not user_data:
-                raise HTTPException(status_code=404, detail="User not found")
-
-            return {
-                **user_data,
-                "name": user.get('name'),
-                "picture": user.get('picture')
-            }
-
-        except Exception as e:
-            logger.error(f"Error getting current user: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @router.post("/logout")
-    async def logout(request: Request):
-        try:
-            request.session.pop("user", None)
-            return {"message": "Logged out successfully"}
-        except Exception as e:
-            logger.error(f"Logout error: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
+        return await user_service.get_hubspot_connection(user["email"])
 
     return router
